@@ -10,7 +10,6 @@ const SOURCES = {
   imdb_top_movies: {
     type:'movie',
     urls:[
-      {kind:'github',   url:'https://raw.githubusercontent.com/theapache64/top250/master/top250_min.json'},
       {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/movie/imdbRating.json'},
       {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/movie/top.json'},
     ],
@@ -39,7 +38,7 @@ const SOURCES = {
 };
 
 const manifest = {
-  id:'community.imdb.charts.ptbr', version:'2.1.0', name:'IMDb Charts',
+  id:'community.imdb.charts.ptbr', version:'2.2.0', name:'IMDb Charts',
   description:'Fileiras do IMDb: Top 250 Filmes, Top 250 Séries, Filmes Populares e Séries Populares.',
   logo:'https://m.media-amazon.com/images/G/01/IMDb/BG_rectangle._CB1509060989_SY230_SX307_AL_.png',
   resources:['catalog'], types:['movie','series'], idPrefixes:['tt'],
