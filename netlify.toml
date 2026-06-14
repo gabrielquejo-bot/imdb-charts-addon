@@ -1,0 +1,15 @@
+[build]
+  functions = "netlify/functions"
+  publish = "public"
+
+[[redirects]]
+  from = "/manifest.json"
+  to = "/.netlify/functions/addon"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/catalog/*"
+  to = "/.netlify/functions/addon"
+  status = 200
+  force = true
