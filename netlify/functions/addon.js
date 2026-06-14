@@ -1,52 +1,30 @@
-// IMDb Charts Addon — Stremio / Nuvio (v2.1 - fontes estáveis + multi-fallback)
+// IMDb Charts Addon — Stremio / Nuvio (v3 DEFINITIVA)
+// Ranking real (IDs do GitHub) + metadados uniformes (Cinemeta por ID)
 const https = require('https');
 
 const cache = {};
-const CACHE_MS = 1000 * 60 * 60 * 6;
+const CACHE_MS = 1000 * 60 * 60 * 6; // atualiza a cada 6h
 
-// Para cada fileira, tentamos uma lista de URLs em ordem até uma retornar dados.
-// Top 250 Filmes: JSON oficial (GitHub). Demais: catálogos do Cinemeta (oficial Stremio).
-const SOURCES = {
-  imdb_top_movies: {
-    type:'movie',
-    urls:[
-      {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/movie/imdbRating.json'},
-      {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/movie/top.json'},
-    ],
-  },
-  imdb_top_series: {
-    type:'series',
-    urls:[
-      {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/series/imdbRating.json'},
-      {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/series/top.json'},
-    ],
-  },
-  imdb_pop_movies: {
-    type:'movie',
-    urls:[
-      {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/movie/top.json'},
-      {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/movie/popular.json'},
-    ],
-  },
-  imdb_pop_series: {
-    type:'series',
-    urls:[
-      {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/series/top.json'},
-      {kind:'cinemeta', url:'https://v3-cinemeta.strem.io/catalog/series/popular.json'},
-    ],
-  },
+// Fontes de IDs (ranking real, atualizadas periodicamente no GitHub):
+const RANK_SOURCES = {
+  imdb_pop_series: { type:'series', url:'https://raw.githubusercontent.com/crazyuploader/IMDb_Top_50/main/data/popular/shows.json', fallback:'https://v3-cinemeta.strem.io/catalog/series/top.json' },
+  imdb_pop_movies: { type:'movie',  url:'https://raw.githubusercontent.com/crazyuploader/IMDb_Top_50/main/data/popular/movies.json', fallback:'https://v3-cinemeta.strem.io/catalog/movie/top.json' },
+  imdb_top_series: { type:'series', url:'https://raw.githubusercontent.com/crazyuploader/IMDb_Top_50/main/data/top250/shows.json', fallback:'https://v3-cinemeta.strem.io/catalog/series/top.json' },
+  imdb_top_movies: { type:'movie',  url:'https://raw.githubusercontent.com/crazyuploader/IMDb_Top_50/main/data/top250/movies.json', fallback:'https://v3-cinemeta.strem.io/catalog/movie/top.json' },
 };
+// Populares vêm direto do catálogo "top" do Cinemeta (Popular oficial):
+const POPULAR_SOURCES = {};
 
 const manifest = {
-  id:'community.imdb.charts.ptbr', version:'2.2.0', name:'IMDb Charts',
-  description:'Fileiras do IMDb: Top 250 Filmes, Top 250 Séries, Filmes Populares e Séries Populares.',
+  id:'community.imdb.charts.ptbr', version:'3.2.0', name:'IMDb Charts',
+  description:'Fileiras do IMDb: Top 250 Filmes, Top 250 Séries, Filmes Populares e Séries Populares. Atualiza periodicamente.',
   logo:'https://m.media-amazon.com/images/G/01/IMDb/BG_rectangle._CB1509060989_SY230_SX307_AL_.png',
   resources:['catalog'], types:['movie','series'], idPrefixes:['tt'],
   catalogs:[
-    {type:'movie', id:'imdb_top_movies', name:'IMDb Top 250 Filmes'},
-    {type:'series',id:'imdb_top_series', name:'IMDb Top 250 Séries'},
-    {type:'movie', id:'imdb_pop_movies', name:'IMDb Filmes Populares'},
     {type:'series',id:'imdb_pop_series', name:'IMDb Séries Populares'},
+    {type:'movie', id:'imdb_pop_movies', name:'IMDb Filmes Populares'},
+    {type:'series',id:'imdb_top_series', name:'IMDb Top 250 Séries'},
+    {type:'movie', id:'imdb_top_movies', name:'IMDb Top 250 Filmes'},
   ],
 };
 
@@ -60,25 +38,44 @@ function fetchUrl(url){
       let d=''; res.on('data',c=>d+=c); res.on('end',()=>resolve(d));
     });
     req.on('error',reject);
-    req.setTimeout(15000,()=>{req.destroy();reject(new Error('timeout'));});
+    req.setTimeout(20000,()=>{req.destroy();reject(new Error('timeout'));});
   });
 }
 
-function parseGithub(text, type){
+// Extrai lista ordenada de IDs do JSON de ranking (campo "link" tem o tt...)
+function extractIds(text){
   let arr; try{arr=JSON.parse(text);}catch(e){return [];}
   if(!Array.isArray(arr)) return [];
-  const out=[];
+  const ids=[];
   for(const it of arr){
-    const m=(it.imdb_url||'').match(/(tt\d+)/); if(!m) continue;
-    out.push({
-      id:m[1], type, name:it.name||'',
-      poster:it.image_url||it.thumb_url||`https://images.metahub.space/poster/medium/${m[1]}/img`,
-      posterShape:'poster',
-      releaseInfo:it.year?String(it.year):undefined,
-      imdbRating:it.rating?String(it.rating):undefined,
-    });
+    const src=it.link||it.imdb_url||it.url||it.id||'';
+    const m=String(src).match(/(tt\d+)/);
+    if(m) ids.push(m[1]);
   }
-  return out;
+  return ids;
+}
+
+// Busca metadado de 1 item no Cinemeta (com pequeno cache por id)
+const metaCache={};
+async function getMeta(type,id){
+  const k=type+':'+id;
+  if(metaCache[k]&&(Date.now()-metaCache[k].ts)<CACHE_MS) return metaCache[k].data;
+  try{
+    const t=await fetchUrl(`https://v3-cinemeta.strem.io/meta/${type}/${id}.json`);
+    const j=JSON.parse(t);
+    if(j&&j.meta){
+      const m=j.meta;
+      const data={
+        id:m.id, type:m.type||type, name:m.name||'',
+        poster:m.poster||`https://images.metahub.space/poster/medium/${id}/img`,
+        posterShape:'poster', releaseInfo:m.releaseInfo, imdbRating:m.imdbRating,
+      };
+      metaCache[k]={ts:Date.now(),data};
+      return data;
+    }
+  }catch(e){}
+  // fallback minimal
+  return {id,type,name:'',poster:`https://images.metahub.space/poster/medium/${id}/img`,posterShape:'poster'};
 }
 
 function parseCinemeta(text, type){
@@ -87,23 +84,37 @@ function parseCinemeta(text, type){
   return metas.filter(m=>m&&m.id&&/^tt\d+/.test(m.id)).map(m=>({
     id:m.id, type:m.type||type, name:m.name||'',
     poster:m.poster||`https://images.metahub.space/poster/medium/${m.id}/img`,
-    posterShape:m.posterShape||'poster',
-    releaseInfo:m.releaseInfo, imdbRating:m.imdbRating,
+    posterShape:'poster', releaseInfo:m.releaseInfo, imdbRating:m.imdbRating,
   }));
 }
 
 async function getCatalog(key){
   const now=Date.now();
   if(cache[key]&&(now-cache[key].ts)<CACHE_MS) return cache[key].data;
-  const s=SOURCES[key]; if(!s) return [];
+
+  const s=RANK_SOURCES[key];
+  if(!s) return [];
   let metas=[];
-  for(const src of s.urls){
-    try{
-      const t=await fetchUrl(src.url);
-      metas = src.kind==='github' ? parseGithub(t,s.type) : parseCinemeta(t,s.type);
-      if(metas.length) break; // achou, para
-    }catch(e){}
+
+  // 1) tenta a fonte de ranking real (GitHub) -> metadados Cinemeta por ID
+  try{
+    const t=await fetchUrl(s.url);
+    const ids=extractIds(t).slice(0,250);
+    if(ids.length){
+      const batch=20; const out=[];
+      for(let i=0;i<ids.length;i+=batch){
+        const part=await Promise.all(ids.slice(i,i+batch).map(id=>getMeta(s.type,id)));
+        out.push(...part);
+      }
+      metas=out.filter(m=>m&&m.id);
+    }
+  }catch(e){}
+
+  // 2) fallback: catalogo "top" do Cinemeta, se a fonte falhou
+  if(!metas.length && s.fallback){
+    try{ const t=await fetchUrl(s.fallback); metas=parseCinemeta(t,s.type); }catch(e){}
   }
+
   if(metas.length) cache[key]={ts:now,data:metas};
   return metas;
 }
